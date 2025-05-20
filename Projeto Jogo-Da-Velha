@@ -1,0 +1,234 @@
+#include <winsock2.h>     // Funcoes e estruturas de rede (sockets)
+#include <windows.h>      // Controle do console (cores, limpar tela etc)
+#include <ws2tcpip.h>     // Complementos para sockets
+#include <stdio.h>
+#include <stdlib.h>
+
+// Linka a biblioteca ws2_32.lib 
+#pragma comment(lib, "ws2_32.lib")
+
+#define PORTA 5555  // Porta usada na conexao TCP
+
+char tabuleiro[9];  // Representa as 9 casas do jogo da velha
+
+// === INTERFACE DO CONSOLE ===
+
+// Altera a cor do texto no terminal 
+void setCor(int cor) {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    SetConsoleTextAttribute(hConsole, cor);
+}
+
+// Limpa a tela do terminal
+void limparTela() {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    DWORD count;
+    DWORD cellCount;
+    COORD homeCoords = {0, 0};
+
+    if (hConsole == INVALID_HANDLE_VALUE) return;
+    if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) return;
+
+    cellCount = csbi.dwSize.X * csbi.dwSize.Y;
+
+    // Preenche tela com espacos e reseta atributos
+    FillConsoleOutputCharacter(hConsole, ' ', cellCount, homeCoords, &count);
+    FillConsoleOutputAttribute(hConsole, csbi.wAttributes, cellCount, homeCoords, &count);
+    SetConsoleCursorPosition(hConsole, homeCoords);
+}
+
+// Desenha o tabuleiro na tela com cores diferentes para X, O e numeros
+void desenharTabuleiro() {
+    limparTela();
+    printf("\n       TIC - TAC - TOE\n\n");
+    printf("         -------------\n");
+    for (int i = 0; i < 9; i++) {
+        if (i % 3 == 0) printf("         | ");
+
+        if (tabuleiro[i] == 'X') setCor(12);     // Vermelho para X
+        else if (tabuleiro[i] == 'O') setCor(9); // Azul para O
+        else setCor(8);                          // Cinza claro para numeros
+
+        printf("%c", tabuleiro[i]);
+        setCor(7);  // Resetar cor padrao
+        printf(" ");
+
+        if (i % 3 == 2) {
+            printf("|\n");
+            if (i != 8) printf("         |---|---|---|\n");
+        } else {
+            printf("| ");
+        }
+    }
+    printf("         -------------\n\n");
+}
+
+// Verifica se ha um vencedor no tabuleiro
+char verificarVencedor() {
+    int v[8][3] = { // Combinacoes vencedoras
+        {0,1,2}, {3,4,5}, {6,7,8}, // Linhas
+        {0,3,6}, {1,4,7}, {2,5,8}, // Colunas
+        {0,4,8}, {2,4,6}           // Diagonais
+    };
+    for (int i = 0; i < 8; i++) {
+        if (tabuleiro[v[i][0]] == tabuleiro[v[i][1]] &&
+            tabuleiro[v[i][1]] == tabuleiro[v[i][2]]) {
+            return tabuleiro[v[i][0]]; // Retorna X ou O vencedor
+        }
+    }
+    return ' '; // Sem vencedor ainda
+}
+
+// Verifica se todas as casas estao preenchidas (empate)
+int empate() {
+    for (int i = 0; i < 9; i++) {
+        if (tabuleiro[i] != 'X' && tabuleiro[i] != 'O') return 0;
+    }
+    return 1;
+}
+
+// Inicializa o tabuleiro com os numeros de 0 a 8
+void iniciarTabuleiro() {
+    for (int i = 0; i < 9; i++) tabuleiro[i] = '0' + i;
+}
+
+// Funcao principal do jogo (rodando apos conexao estabelecida)
+void jogar(SOCKET conexao, int jogadorLocal) {
+    int jogada;
+    char buffer[2];
+    iniciarTabuleiro();
+
+    while (1) {
+        desenharTabuleiro();
+        if (verificarVencedor() != ' ') break;
+        if (empate()) break;
+
+        // Jogador 1 (X)
+        if (jogadorLocal == 1) {
+            printf("Sua vez (X). Escolha uma casa (0-8): ");
+            scanf("%d", &jogada);
+            // Validacao da jogada
+            while (jogada < 0 || jogada > 8 || tabuleiro[jogada] == 'X' || tabuleiro[jogada] == 'O') {
+                printf("Casa invalida ou ocupada! Escolha outra (0-8): ");
+                scanf("%d", &jogada);
+            }
+            tabuleiro[jogada] = 'X';
+            buffer[0] = jogada + '0'; // Envia a jogada como caractere
+            send(conexao, buffer, 1, 0); // Envia para o outro jogador
+        } else {
+            printf("Esperando jogada do adversario...\n");
+            recv(conexao, buffer, 1, 0); // Recebe jogada do adversario
+            jogada = buffer[0] - '0';
+            if (jogada >= 0 && jogada <= 8) tabuleiro[jogada] = 'X';
+        }
+
+        desenharTabuleiro();
+        if (verificarVencedor() != ' ') break;
+        if (empate()) break;
+
+        // Jogador 2 (O)
+        if (jogadorLocal == 2) {
+            printf("Sua vez (O). Escolha uma casa (0-8): ");
+            scanf("%d", &jogada);
+            while (jogada < 0 || jogada > 8 || tabuleiro[jogada] == 'X' || tabuleiro[jogada] == 'O') {
+                printf("Casa invalida ou ocupada! Escolha outra (0-8): ");
+                scanf("%d", &jogada);
+            }
+            tabuleiro[jogada] = 'O';
+            buffer[0] = jogada + '0';
+            send(conexao, buffer, 1, 0);
+        } else {
+            printf("Esperando jogada do adversario...\n");
+            recv(conexao, buffer, 1, 0);
+            jogada = buffer[0] - '0';
+            if (jogada >= 0 && jogada <= 8) tabuleiro[jogada] = 'O';
+        }
+    }
+
+    desenharTabuleiro();
+
+    // Exibe o resultado final
+    char vencedor = verificarVencedor();
+    if ((vencedor == 'X' && jogadorLocal == 1) || (vencedor == 'O' && jogadorLocal == 2)) {
+        setCor(10); printf("\nParabens! Voce venceu!\n");
+    } else if (vencedor == ' ') {
+        setCor(14); printf("\nEmpate!\n");
+    } else {
+        setCor(12); printf("\nVoce perdeu!\n");
+    }
+
+    setCor(7); // Resetar cor
+    printf("\nPressione ENTER para sair...\n");
+    getchar(); getchar(); // Pausa o terminal ate pressionar ENTER
+}
+
+// === MODO SERVIDOR ===
+void modoServidor() {
+    WSADATA wsa;
+    SOCKET s, cliente;
+    struct sockaddr_in servidor, remoto;
+    int tamanho = sizeof(remoto);
+
+    WSAStartup(MAKEWORD(2, 2), &wsa);               // Inicializa Winsock
+    s = socket(AF_INET, SOCK_STREAM, 0);            // Cria socket TCP
+
+    servidor.sin_family = AF_INET;                  // IPv4
+    servidor.sin_addr.s_addr = INADDR_ANY;          // Aceita qualquer IP local
+    servidor.sin_port = htons(PORTA);               // Porta definida
+
+    bind(s, (struct sockaddr *)&servidor, sizeof(servidor)); // Associa IP e porta
+    listen(s, 1);                                    // Escuta por 1 conexao
+
+    printf("Aguardando jogador...\n");
+    cliente = accept(s, (struct sockaddr *)&remoto, &tamanho); // Aceita conexao
+    printf("Jogador conectado!\n");
+
+    jogar(cliente, 1); // Inicia jogo como jogador 1 (X)
+
+    closesocket(s);
+    WSACleanup(); // Finaliza Winsock
+}
+
+// === MODO CLIENTE ===
+void modoCliente() {
+    WSADATA wsa;
+    SOCKET s;
+    struct sockaddr_in servidor;
+    char ip[32];
+
+    printf("Digite o IP do servidor: ");
+    scanf("%s", ip); // IP do servidor digitado
+
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+    s = socket(AF_INET, SOCK_STREAM, 0);
+
+    servidor.sin_family = AF_INET;
+    servidor.sin_addr.s_addr = inet_addr(ip); // Conecta ao IP informado
+    servidor.sin_port = htons(PORTA);
+
+    connect(s, (struct sockaddr *)&servidor, sizeof(servidor)); // Tenta conectar
+    printf("Conectado ao servidor!\n");
+
+    jogar(s, 2); // Inicia como jogador 2 (O)
+
+    closesocket(s);
+    WSACleanup();
+}
+
+// === MENU PRINCIPAL ===
+int main() {
+    int opcao;
+    limparTela();
+    printf("=== JOGO DA VELHA ONLINE ===\n");
+    printf("1 - Criar partida (Servidor)\n");
+    printf("2 - Entrar na partida (Cliente)\n");
+    printf("Escolha: ");
+    scanf("%d", &opcao);
+
+    if (opcao == 1) modoServidor();
+    else if (opcao == 2) modoCliente();
+    else printf("Opcao invalida!\n");
+
+    return 0;
+}
